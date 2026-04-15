@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use redb::{Database, ReadableTable, TableDefinition};
+use redb::{Database, ReadableTable, ReadableTableMetadata, TableDefinition};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -41,6 +41,7 @@ pub struct Store {
     db: Database,
 }
 
+#[allow(dead_code)]
 impl Store {
     pub fn open(path: &Path) -> Result<Self, redb::Error> {
         if let Some(parent) = path.parent() {

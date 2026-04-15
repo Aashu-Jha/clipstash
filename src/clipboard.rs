@@ -13,8 +13,6 @@ use std::thread;
 use std::time::Duration;
 
 use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
-use objc2::ClassType;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypePNG, NSPasteboardTypeString};
 use objc2_foundation::{NSArray, NSString};
 use tao::event_loop::EventLoopProxy;
@@ -93,10 +91,11 @@ unsafe fn read_text(pb: &NSPasteboard) -> Option<String> {
 unsafe fn read_image(pb: &NSPasteboard) -> Option<(Vec<u8>, u32, u32)> {
     let png_type = NSPasteboardTypePNG;
     let data = pb.dataForType(png_type)?;
-    let bytes: &[u8] = data.bytes();
+    let bytes: Vec<u8> = data.to_vec();
     // Decode once to extract dimensions for the preview label.
-    let img = image::load_from_memory(bytes).ok()?;
-    Some((bytes.to_vec(), img.width(), img.height()))
+    let img = image::load_from_memory(&bytes).ok()?;
+    let (w, h) = (img.width(), img.height());
+    Some((bytes, w, h))
 }
 
 /// Write a clip back to the system pasteboard (used when the user
@@ -117,7 +116,7 @@ pub fn write_to_pasteboard(clip: &crate::store::Clip) {
                 let data = NSData::with_bytes(png);
                 let types = NSArray::from_slice(&[NSPasteboardTypePNG]);
                 pb.declareTypes_owner(&types, None);
-                pb.setData_forType(&data, NSPasteboardTypePNG);
+                pb.setData_forType(Some(&data), NSPasteboardTypePNG);
             }
         }
     });
