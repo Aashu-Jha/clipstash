@@ -27,17 +27,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
-use objc2::{define_class, msg_send, sel, MainThreadOnly};
+use objc2::{define_class, msg_send, sel, AnyThread, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSButton, NSColor,
-    NSControlTextEditingDelegate, NSPanel, NSPopUpButton, NSScrollView, NSSearchField, NSStatusBar, NSStatusItem,
+    NSBezelStyle, NSControlTextEditingDelegate, NSImage, NSImageView, NSPanel, NSPopUpButton,
+    NSScrollView, NSSearchField, NSStatusBar, NSStatusItem,
     NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate, NSTextField,
     NSVariableStatusItemLength, NSView, NSVisualEffectMaterial, NSVisualEffectView,
     NSWindowStyleMask,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
-    NSSize, NSString,
+    MainThreadMarker, NSData, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint,
+    NSRect, NSSize, NSString,
 };
 use time::OffsetDateTime;
 
@@ -71,6 +72,7 @@ struct PopoverState {
     search_field: Retained<NSSearchField>,
     filter_popup: Retained<NSPopUpButton>,
     count_label: Retained<NSTextField>,
+    delegate: Retained<Delegate>,
     rows: Vec<Clip>,
     search: String,
     filter: Filter,
@@ -125,7 +127,7 @@ define_class!(
             let mtm = MainThreadMarker::from(self);
             with_state(|s| {
                 let clip = s.rows.get(row as usize)?;
-                Some(build_row_view(mtm, clip))
+                Some(build_row_view(mtm, clip, &s.delegate))
             })
             .flatten()
         }
@@ -163,6 +165,24 @@ define_class!(
                 s.search = text.to_string();
             });
             reload_rows();
+        }
+
+        #[unsafe(method(onTrash:))]
+        fn on_trash(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let btn: &NSButton = unsafe { &*(sender as *const AnyObject as *const NSButton) };
+            let id = unsafe { btn.tag() } as u64;
+            with_state(|s| {
+                if let Ok(store) = s.store.lock() {
+                    let _ = store.remove(id);
+                }
+            });
+            reload_rows();
+        }
+
+        #[unsafe(method(onGear:))]
+        fn on_gear(&self, _sender: Option<&AnyObject>) {
+            // Placeholder — settings menu not yet implemented.
         }
 
         #[unsafe(method(onClear:))]
@@ -263,7 +283,10 @@ impl Popover {
         unsafe {
             vfx.setMaterial(NSVisualEffectMaterial::HUDWindow);
             vfx.setWantsLayer(true);
-            // TODO: round corners via CALayer once we wire in objc2-quartz-core.
+            if let Some(layer) = vfx.layer() {
+                layer.setCornerRadius(12.0);
+                layer.setMasksToBounds(true);
+            }
         }
         panel.setContentView(Some(&vfx));
 
@@ -287,6 +310,18 @@ impl Popover {
             count_label.setAlignment(objc2_app_kit::NSTextAlignment::Center);
         }
         vfx.addSubview(&count_label);
+
+        let gear_btn = make_text_button(
+            mtm,
+            NSRect::new(
+                NSPoint::new(8.0, height - header_h + 2.0),
+                NSSize::new(28.0, 24.0),
+            ),
+            "⚙︎",
+            &delegate,
+            sel!(onGear:),
+        );
+        vfx.addSubview(&gear_btn);
 
         let clear_btn = make_text_button(
             mtm,
@@ -351,7 +386,7 @@ impl Popover {
             let t: Retained<NSTableView> =
                 msg_send![alloc, initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, table_h))];
             t.setHeaderView(None);
-            t.setRowHeight(44.0);
+            t.setRowHeight(52.0);
             t.setBackgroundColor(&NSColor::clearColor());
             t.setAllowsMultipleSelection(false);
             t.setIntercellSpacing(NSSize::new(0.0, 0.0));
@@ -392,6 +427,7 @@ impl Popover {
             search_field,
             filter_popup,
             count_label,
+            delegate: delegate.clone(),
             rows: Vec::new(),
             search: String::new(),
             filter: Filter::All,
@@ -532,23 +568,48 @@ fn make_text_button(
     }
 }
 
-fn build_row_view(mtm: MainThreadMarker, clip: &Clip) -> Retained<NSView> {
+fn build_row_view(mtm: MainThreadMarker, clip: &Clip, delegate: &Delegate) -> Retained<NSView> {
     let width = 360.0;
-    let row_rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, 44.0));
+    let row_h = 52.0;
+    let row_rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, row_h));
     let view: Retained<NSView> = unsafe {
         let alloc = NSView::alloc(mtm);
         msg_send![alloc, initWithFrame: row_rect]
     };
 
+    let text_x = if let ClipKind::Image { png, .. } = &clip.kind {
+        unsafe {
+            let thumb: Retained<NSImageView> = {
+                let alloc = NSImageView::alloc(mtm);
+                msg_send![
+                    alloc,
+                    initWithFrame: NSRect::new(NSPoint::new(8.0, 2.0), NSSize::new(48.0, 48.0))
+                ]
+            };
+            let data = NSData::with_bytes(png);
+            let img = NSImage::initWithData(NSImage::alloc(), &data);
+            if let Some(img) = img {
+                thumb.setImage(Some(&img));
+            }
+            view.addSubview(&thumb);
+        }
+        64.0
+    } else {
+        12.0
+    };
+
     let title = make_label(
         mtm,
-        NSRect::new(NSPoint::new(12.0, 20.0), NSSize::new(width - 100.0, 18.0)),
+        NSRect::new(
+            NSPoint::new(text_x, 26.0),
+            NSSize::new(width - text_x - 104.0, 18.0),
+        ),
         &clip.preview,
         false,
     );
     let date = make_label(
         mtm,
-        NSRect::new(NSPoint::new(width - 90.0, 20.0), NSSize::new(80.0, 16.0)),
+        NSRect::new(NSPoint::new(width - 124.0, 8.0), NSSize::new(84.0, 16.0)),
         &format_ts(clip.created_at),
         false,
     );
@@ -557,6 +618,20 @@ fn build_row_view(mtm: MainThreadMarker, clip: &Clip) -> Retained<NSView> {
         date.setTextColor(Some(&NSColor::secondaryLabelColor()));
         view.addSubview(&title);
         view.addSubview(&date);
+
+        let trash: Retained<NSButton> = {
+            let alloc = NSButton::alloc(mtm);
+            let rect = NSRect::new(NSPoint::new(width - 32.0, 16.0), NSSize::new(24.0, 20.0));
+            let b: Retained<NSButton> = msg_send![alloc, initWithFrame: rect];
+            b.setTitle(&NSString::from_str("🗑"));
+            b.setBordered(false);
+            b.setBezelStyle(NSBezelStyle::Rounded);
+            b.setTag(clip.id as NSInteger);
+            b.setTarget(Some(&**delegate as &AnyObject));
+            b.setAction(Some(sel!(onTrash:)));
+            b
+        };
+        view.addSubview(&trash);
     }
     view
 }

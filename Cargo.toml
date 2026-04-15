@@ -24,6 +24,8 @@ objc2-app-kit = { version = "0.3", features = [
     "NSControl",
     "NSEvent",
     "NSFont",
+    "NSImage",
+    "NSImageView",
     "NSPanel",
     "NSPasteboard",
     "NSPopUpButton",
@@ -44,6 +46,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSWindow",
 ] }
 block2 = "0.6"
+objc2-quartz-core = { version = "0.3", features = ["CALayer", "CABase"] }
 
 # We build the status item + popover directly via objc2 so we can match
 # ClipVault's custom panel UI (search box, filter dropdown, image thumbnails,

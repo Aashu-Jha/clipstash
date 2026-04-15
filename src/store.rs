@@ -162,6 +162,18 @@ impl Store {
             .and_then(|v| bincode::deserialize::<Clip>(v.value().as_slice()).ok()))
     }
 
+    pub fn remove(&self, id: u64) -> Result<(), redb::Error> {
+        let wtxn = self.db.begin_write()?;
+        {
+            let mut clips = wtxn.open_table(CLIPS)?;
+            clips.remove(id)?;
+            let mut pinned = wtxn.open_table(PINNED)?;
+            pinned.remove(id)?;
+        }
+        wtxn.commit()?;
+        Ok(())
+    }
+
     pub fn clear(&self) -> Result<(), redb::Error> {
         let wtxn = self.db.begin_write()?;
         {
