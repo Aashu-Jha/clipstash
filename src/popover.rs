@@ -30,7 +30,7 @@ use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{define_class, msg_send, sel, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSButton, NSColor,
-    NSControlTextEditingDelegate, NSPanel, NSScrollView, NSSearchField, NSStatusBar, NSStatusItem,
+    NSControlTextEditingDelegate, NSPanel, NSPopUpButton, NSScrollView, NSSearchField, NSStatusBar, NSStatusItem,
     NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate, NSTextField,
     NSVariableStatusItemLength, NSView, NSVisualEffectMaterial, NSVisualEffectView,
     NSWindowStyleMask,
@@ -69,6 +69,7 @@ struct PopoverState {
     panel: Retained<NSPanel>,
     table: Retained<NSTableView>,
     search_field: Retained<NSSearchField>,
+    filter_popup: Retained<NSPopUpButton>,
     count_label: Retained<NSTextField>,
     rows: Vec<Clip>,
     search: String,
@@ -170,6 +171,19 @@ define_class!(
                 if let Ok(store) = s.store.lock() {
                     let _ = store.clear();
                 }
+            });
+            reload_rows();
+        }
+
+        #[unsafe(method(onFilterChanged:))]
+        fn on_filter_changed(&self, _sender: Option<&AnyObject>) {
+            with_state(|s| {
+                let idx = unsafe { s.filter_popup.indexOfSelectedItem() };
+                s.filter = match idx {
+                    1 => Filter::Text,
+                    2 => Filter::Image,
+                    _ => Filter::All,
+                };
             });
             reload_rows();
         }
@@ -288,18 +302,37 @@ impl Popover {
 
         // --- Search field --------------------------------------------------
         let search_y = height - header_h - search_h + 4.0;
+        let popup_w = 88.0;
         let search_field: Retained<NSSearchField> = unsafe {
             let alloc = NSSearchField::alloc(mtm);
-            let rect = NSRect::new(NSPoint::new(8.0, search_y), NSSize::new(width - 16.0, 24.0));
+            let rect = NSRect::new(
+                NSPoint::new(8.0, search_y),
+                NSSize::new(width - 24.0 - popup_w, 24.0),
+            );
             let sf: Retained<NSSearchField> = msg_send![alloc, initWithFrame: rect];
             sf.setPlaceholderString(Some(&NSString::from_str("Search…")));
-            // Live search via target/action rather than the delegate protocol —
-            // NSSearchField fires its action on every keystroke.
             sf.setTarget(Some(&*delegate));
             sf.setAction(Some(sel!(onSearchChanged:)));
             sf
         };
         vfx.addSubview(&search_field);
+
+        let filter_popup: Retained<NSPopUpButton> = unsafe {
+            let alloc = NSPopUpButton::alloc(mtm);
+            let rect = NSRect::new(
+                NSPoint::new(width - popup_w - 8.0, search_y),
+                NSSize::new(popup_w, 24.0),
+            );
+            let pop: Retained<NSPopUpButton> =
+                msg_send![alloc, initWithFrame: rect, pullsDown: false];
+            for label in ["All", "Text", "Image"] {
+                pop.addItemWithTitle(&NSString::from_str(label));
+            }
+            pop.setTarget(Some(&*delegate));
+            pop.setAction(Some(sel!(onFilterChanged:)));
+            pop
+        };
+        vfx.addSubview(&filter_popup);
 
         // --- Table + scroll view ------------------------------------------
         let table_y = footer_h;
@@ -357,6 +390,7 @@ impl Popover {
             panel,
             table,
             search_field,
+            filter_popup,
             count_label,
             rows: Vec::new(),
             search: String::new(),
